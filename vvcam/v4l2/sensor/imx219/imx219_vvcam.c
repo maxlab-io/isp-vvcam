@@ -120,6 +120,8 @@
 #define IMX219_PIXEL_ARRAY_WIDTH	3280U
 #define IMX219_PIXEL_ARRAY_HEIGHT	2464U
 
+#define DCG_CONVERSION_GAIN 11
+
 struct imx219_reg {
 	u16 address;
 	u8 val;
@@ -539,7 +541,7 @@ static const struct imx219_mode supported_modes[] = {
 };
 
 
-static struct vvcam_mode_info_s pov2775_mode_info[] = {
+static struct vvcam_mode_info_s imx219_mode_info[] = {
 	{
 		.index          = 0,
 		.size           = {
@@ -580,8 +582,8 @@ static struct vvcam_mode_info_s pov2775_mode_info[] = {
 		.mipi_info = {
 			.mipi_lane = 2,
 		},
-		.preg_data      = ov2775_init_setting_1080p,
-		.reg_data_count = ARRAY_SIZE(ov2775_init_setting_1080p),
+		//.preg_data      = ov2775_init_setting_1080p,
+		//.reg_data_count = ARRAY_SIZE(ov2775_init_setting_1080p),
 	},
 	{
 		.index          = 1,
@@ -643,8 +645,8 @@ static struct vvcam_mode_info_s pov2775_mode_info[] = {
 		.mipi_info = {
 			.mipi_lane = 2,
 		},
-		.preg_data = ov2775_init_setting_1080p_hdr,
-		.reg_data_count = ARRAY_SIZE(ov2775_init_setting_1080p_hdr),
+		//.preg_data = ov2775_init_setting_1080p_hdr,
+		//.reg_data_count = ARRAY_SIZE(ov2775_init_setting_1080p_hdr),
 	},
 	{
 		.index          = 2,
@@ -701,8 +703,8 @@ static struct vvcam_mode_info_s pov2775_mode_info[] = {
 		.mipi_info = {
 			.mipi_lane = 2,
 		},
-		.preg_data = ov2775_1080p_native_hdr_regs,
-		.reg_data_count = ARRAY_SIZE(ov2775_1080p_native_hdr_regs),
+		//.preg_data = ov2775_1080p_native_hdr_regs,
+		//.reg_data_count = ARRAY_SIZE(ov2775_1080p_native_hdr_regs),
 	},
 	{
 		.index          = 3,
@@ -744,8 +746,8 @@ static struct vvcam_mode_info_s pov2775_mode_info[] = {
 		.mipi_info = {
 			.mipi_lane = 2,
 		},
-		.preg_data      = ov2775_init_setting_1080p,
-		.reg_data_count = ARRAY_SIZE(ov2775_init_setting_1080p),
+		//.preg_data      = ov2775_init_setting_1080p,
+		//.reg_data_count = ARRAY_SIZE(ov2775_init_setting_1080p),
 	},
 	{
 		.index          = 4,
@@ -800,8 +802,8 @@ static struct vvcam_mode_info_s pov2775_mode_info[] = {
 		.mipi_info = {
 			.mipi_lane = 2,
 		},
-		.preg_data = ov2775_init_setting_1080p_hdr_2dol,
-		.reg_data_count = ARRAY_SIZE(ov2775_init_setting_1080p_hdr_2dol),
+		//.preg_data = ov2775_init_setting_1080p_hdr_2dol,
+		//.reg_data_count = ARRAY_SIZE(ov2775_init_setting_1080p_hdr_2dol),
 	},
 };
 
@@ -838,6 +840,9 @@ struct imx219 {
 
 	/* Streaming on/off */
 	bool streaming;
+
+    struct i2c_client *i2c_client;
+	vvcam_mode_info_t cur_mode;
 };
 
 static inline struct imx219 *to_imx219(struct v4l2_subdev *_sd)
@@ -955,123 +960,6 @@ static void imx219_set_default_format(struct imx219 *imx219)
 	fmt->height = supported_modes[0].height;
 	fmt->field = V4L2_FIELD_NONE;
 }
-
-static int imx219_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
-{
-	struct imx219 *imx219 = to_imx219(sd);
-	struct v4l2_mbus_framefmt *try_fmt =
-		v4l2_subdev_get_try_format(sd, fh->state, 0);
-	struct v4l2_rect *try_crop;
-
-	mutex_lock(&imx219->mutex);
-
-	/* Initialize try_fmt */
-	try_fmt->width = supported_modes[0].width;
-	try_fmt->height = supported_modes[0].height;
-	try_fmt->code = imx219_get_format_code(imx219,
-					       MEDIA_BUS_FMT_SRGGB10_1X10);
-	try_fmt->field = V4L2_FIELD_NONE;
-
-	/* Initialize try_crop rectangle. */
-	try_crop = v4l2_subdev_get_try_crop(sd, fh->state, 0);
-	try_crop->top = IMX219_PIXEL_ARRAY_TOP;
-	try_crop->left = IMX219_PIXEL_ARRAY_LEFT;
-	try_crop->width = IMX219_PIXEL_ARRAY_WIDTH;
-	try_crop->height = IMX219_PIXEL_ARRAY_HEIGHT;
-
-	mutex_unlock(&imx219->mutex);
-
-	return 0;
-}
-
-static int imx219_set_ctrl(struct v4l2_ctrl *ctrl)
-{
-	struct imx219 *imx219 =
-		container_of(ctrl->handler, struct imx219, ctrl_handler);
-	struct i2c_client *client = v4l2_get_subdevdata(&imx219->sd);
-	int ret;
-
-	if (ctrl->id == V4L2_CID_VBLANK) {
-		int exposure_max, exposure_def;
-
-		/* Update max exposure while meeting expected vblanking */
-		exposure_max = imx219->mode->height + ctrl->val - 4;
-		exposure_def = (exposure_max < IMX219_EXPOSURE_DEFAULT) ?
-			exposure_max : IMX219_EXPOSURE_DEFAULT;
-		__v4l2_ctrl_modify_range(imx219->exposure,
-					 imx219->exposure->minimum,
-					 exposure_max, imx219->exposure->step,
-					 exposure_def);
-	}
-
-	/*
-	 * Applying V4L2 control value only happens
-	 * when power is up for streaming
-	 */
-	if (pm_runtime_get_if_in_use(&client->dev) == 0)
-		return 0;
-
-	switch (ctrl->id) {
-	case V4L2_CID_ANALOGUE_GAIN:
-		ret = imx219_write_reg(imx219, IMX219_REG_ANALOG_GAIN,
-				       IMX219_REG_VALUE_08BIT, ctrl->val);
-		break;
-	case V4L2_CID_EXPOSURE:
-		ret = imx219_write_reg(imx219, IMX219_REG_EXPOSURE,
-				       IMX219_REG_VALUE_16BIT, ctrl->val);
-		break;
-	case V4L2_CID_DIGITAL_GAIN:
-		ret = imx219_write_reg(imx219, IMX219_REG_DIGITAL_GAIN,
-				       IMX219_REG_VALUE_16BIT, ctrl->val);
-		break;
-	case V4L2_CID_TEST_PATTERN:
-		ret = imx219_write_reg(imx219, IMX219_REG_TEST_PATTERN,
-				       IMX219_REG_VALUE_16BIT,
-				       imx219_test_pattern_val[ctrl->val]);
-		break;
-	case V4L2_CID_HFLIP:
-	case V4L2_CID_VFLIP:
-		ret = imx219_write_reg(imx219, IMX219_REG_ORIENTATION, 1,
-				       imx219->hflip->val |
-				       imx219->vflip->val << 1);
-		break;
-	case V4L2_CID_VBLANK:
-		ret = imx219_write_reg(imx219, IMX219_REG_VTS,
-				       IMX219_REG_VALUE_16BIT,
-				       imx219->mode->height + ctrl->val);
-		break;
-	case V4L2_CID_TEST_PATTERN_RED:
-		ret = imx219_write_reg(imx219, IMX219_REG_TESTP_RED,
-				       IMX219_REG_VALUE_16BIT, ctrl->val);
-		break;
-	case V4L2_CID_TEST_PATTERN_GREENR:
-		ret = imx219_write_reg(imx219, IMX219_REG_TESTP_GREENR,
-				       IMX219_REG_VALUE_16BIT, ctrl->val);
-		break;
-	case V4L2_CID_TEST_PATTERN_BLUE:
-		ret = imx219_write_reg(imx219, IMX219_REG_TESTP_BLUE,
-				       IMX219_REG_VALUE_16BIT, ctrl->val);
-		break;
-	case V4L2_CID_TEST_PATTERN_GREENB:
-		ret = imx219_write_reg(imx219, IMX219_REG_TESTP_GREENB,
-				       IMX219_REG_VALUE_16BIT, ctrl->val);
-		break;
-	default:
-		dev_info(&client->dev,
-			 "ctrl(id:0x%x,val:0x%x) is not handled\n",
-			 ctrl->id, ctrl->val);
-		ret = -EINVAL;
-		break;
-	}
-
-	pm_runtime_put(&client->dev);
-
-	return ret;
-}
-
-static const struct v4l2_ctrl_ops imx219_ctrl_ops = {
-	.s_ctrl = imx219_set_ctrl,
-};
 
 static int imx219_enum_mbus_code(struct v4l2_subdev *sd,
 				 struct v4l2_subdev_state *sd_state,
@@ -1332,11 +1220,6 @@ static int imx219_start_streaming(struct imx219 *imx219)
 	if (ret)
 		goto err_rpm_put;
 
-    ret = imx219_write_reg(imx219, IMX219_REG_TEST_PATTERN,
-                        IMX219_REG_VALUE_16BIT, 1);
-	if (ret)
-		goto err_rpm_put;
-
     dev_info(&client->dev, "%s started\n", __func__);
 
 	/* set stream on register */
@@ -1534,8 +1417,8 @@ static int imx219_get_clk(struct imx219 *sensor, void *clk)
 {
 	struct vvcam_clk_s vvcam_clk;
 	int ret = 0;
-	vvcam_clk.sensor_mclk = clk_get_rate(sensor->sensor_clk);
-	vvcam_clk.csi_max_pixel_clk = sensor->ocp.max_pixel_frequency;
+	vvcam_clk.sensor_mclk = 0;//clk_get_rate(sensor->sensor_clk);
+	vvcam_clk.csi_max_pixel_clk = 0;//sensor->ocp.max_pixel_frequency;
 	ret = copy_to_user(clk, &vvcam_clk, sizeof(struct vvcam_clk_s));
 	if (ret != 0)
 		ret = -EINVAL;
@@ -1547,7 +1430,7 @@ static int imx219_query_capability(struct imx219 *sensor, void *arg)
 	struct v4l2_capability *pcap = (struct v4l2_capability *)arg;
 
 	strcpy((char *)pcap->driver, "imx219");
-	sprintf((char *)pcap->bus_info, "csi%d",sensor->csi_id);
+	sprintf((char *)pcap->bus_info, "csi");
 	if(sensor->i2c_client->adapter) {
 		pcap->bus_info[VVCAM_CAP_BUS_INFO_I2C_ADAPTER_NR_POS] =
 			(__u8)sensor->i2c_client->adapter->nr;
@@ -1561,11 +1444,11 @@ static int imx219_query_supports(struct imx219 *sensor, void* parry)
 {
 	int ret = 0;
 	struct vvcam_mode_info_array_s *psensor_mode_arry = parry;
-	uint32_t support_counts = ARRAY_SIZE(pimx219_mode_info);
+	uint32_t support_counts = ARRAY_SIZE(imx219_mode_info);
 
 	ret = copy_to_user(&psensor_mode_arry->count, &support_counts, sizeof(support_counts));
-	ret |= copy_to_user(&psensor_mode_arry->modes, pimx219_mode_info,
-			   sizeof(pimx219_mode_info));
+	ret |= copy_to_user(&psensor_mode_arry->modes, imx219_mode_info,
+			   sizeof(imx219_mode_info));
 	if (ret != 0)
 		ret = -ENOMEM;
 	return ret;
@@ -1575,15 +1458,13 @@ static int imx219_query_supports(struct imx219 *sensor, void* parry)
 static int imx219_get_sensor_id(struct imx219 *sensor, void* pchip_id)
 {
 	int ret = 0;
-	u16 chip_id;
-	u8 chip_id_high = 0;
-	u8 chip_id_low = 0;
-	ret = imx219_read_reg(sensor, 0x300a, &chip_id_high);
-	ret |= imx219_read_reg(sensor, 0x300b, &chip_id_low);
+	uint32_t chip_id = 0;
+    uint16_t val = 0;
+	ret = imx219_read_reg(sensor, IMX219_REG_CHIP_ID,
+                          IMX219_REG_VALUE_16BIT, &chip_id);
 
-	chip_id = ((chip_id_high & 0xff) << 8) | (chip_id_low & 0xff);
-
-	ret = copy_to_user(pchip_id, &chip_id, sizeof(u16));
+    val = chip_id;
+	ret = copy_to_user(pchip_id, &val, sizeof(val));
 	if (ret != 0)
 		ret = -ENOMEM;
 	return ret;
@@ -1592,7 +1473,7 @@ static int imx219_get_sensor_id(struct imx219 *sensor, void* pchip_id)
 static int imx219_get_reserve_id(struct imx219 *sensor, void* preserve_id)
 {
 	int ret = 0;
-	u16 reserve_id = 0x2770;
+	u16 reserve_id = 0x0219;
 	ret = copy_to_user(preserve_id, &reserve_id, sizeof(u16));
 	if (ret != 0)
 		ret = -ENOMEM;
@@ -1618,18 +1499,10 @@ static int imx219_set_sensor_mode(struct imx219 *sensor, void* pmode)
 		sizeof(struct vvcam_mode_info_s));
 	if (ret != 0)
 		return -ENOMEM;
-	for (i = 0; i < ARRAY_SIZE(pimx219_mode_info); i++) {
-		if (pimx219_mode_info[i].index == sensor_mode.index) {
-			memcpy(&sensor->cur_mode, &pimx219_mode_info[i],
+	for (i = 0; i < ARRAY_SIZE(imx219_mode_info); i++) {
+		if (imx219_mode_info[i].index == sensor_mode.index) {
+			memcpy(&sensor->cur_mode, &imx219_mode_info[i],
 				sizeof(struct vvcam_mode_info_s));
-			if ((pimx219_mode_info[i].index == 1) &&
-			    (sensor->ocp.max_pixel_frequency == 266000000)) {
-				sensor->cur_mode.preg_data =
-					imx219_init_setting_1080p_hdr_low_freq;
-				sensor->cur_mode.reg_data_count =
-					ARRAY_SIZE(imx219_init_setting_1080p_hdr_low_freq);
-				sensor->cur_mode.ae_info.one_line_exp_time_ns = 60784;
-			}
 			return 0;
 		}
 	}
@@ -1645,193 +1518,35 @@ static int imx219_set_lexp(struct imx219 *sensor, u32 exp)
 static int imx219_set_exp(struct imx219 *sensor, u32 exp)
 {
 	int ret = 0;
-	ret |= imx219_write_reg(sensor, 0x3467, 0x00);
-	ret |= imx219_write_reg(sensor, 0x3464, 0x04);
-
-	ret |= imx219_write_reg(sensor, 0x30b6, (exp >> 8) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x30b7, exp & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x3464, 0x14);
-	ret |= imx219_write_reg(sensor, 0x3467, 0x01);
 	return ret;
 }
 
 static int imx219_set_vsexp(struct imx219 *sensor, u32 exp)
 {
 	int ret = 0;
-	if (exp == 0x16)
-		exp = 0x17;
-	ret |= imx219_write_reg(sensor, 0x3467, 0x00);
-	ret |= imx219_write_reg(sensor, 0x3464, 0x04);
-
-	ret |= imx219_write_reg(sensor, 0x30b8, (exp >> 8) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x30b9, exp & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x3464, 0x14);
-	ret |= imx219_write_reg(sensor, 0x3467, 0x01);
 	return ret;
 }
 
 static int imx219_set_lgain(struct imx219 *sensor, u32 gain)
 {
-	u32 again = 0;
-	u32 dgain = 0;
-
-	if (gain < ((2 * DCG_CONVERSION_GAIN) << 10)){
-		gain = (2 * DCG_CONVERSION_GAIN) << 10;
-	}
-
-	if (gain < ((2 * DCG_CONVERSION_GAIN) << 10)) {
-		again = 0;
-	} else if (gain < ((4 * DCG_CONVERSION_GAIN) << 10)) {
-		again = 1;
-	} else if (gain < ((8 * DCG_CONVERSION_GAIN) << 10)) {
-		again = 2;
-	} else {
-		again = 3;
-	}
-	dgain = (gain * 0x100) / ((( 1<< again) * DCG_CONVERSION_GAIN) << 10);
-
-	sensor->hcg_again = again;
-	sensor->hcg_dgain = dgain;
 	return 0;
 }
 
 static int imx219_set_gain(struct imx219 *sensor, u32 gain)
 {
 	int ret = 0;
-	u32 again = 0;
-	u32 dgain = 0;
-	u8 reg_val;
-
-	if (gain < (3 << 10)){
-		gain = 3  << 10;
-	}
-
-	if (gain < (3 << 10)) {
-		again = 0;
-	} else if (gain < (6 << 10)) {
-		again = 1;
-	} else if (gain < (12 << 10)) {
-		again = 2;
-	} else {
-		again = 3;
-	}
-	dgain = (gain * 0x100) / (( 1<< again) << 10);
-
-	if (sensor->cur_mode.hdr_mode == SENSOR_MODE_LINEAR) {
-		ret = imx219_read_reg(sensor, 0x30bb, &reg_val);
-		reg_val &= ~0x03;
-		reg_val |= again  & 0x03;
-
-		ret  = imx219_write_reg(sensor, 0x3467, 0x00);
-		ret |= imx219_write_reg(sensor, 0x3464, 0x04);
-
-		ret |= imx219_write_reg(sensor, 0x30bb, reg_val);
-		ret |= imx219_write_reg(sensor, 0x315a, (dgain>>8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x315b, dgain & 0xff);
-
-		ret |= imx219_write_reg(sensor, 0x3464, 0x14);
-		ret |= imx219_write_reg(sensor, 0x3467, 0x01);
-	} else {
-		ret = imx219_read_reg(sensor, 0x30bb, &reg_val);
-
-		reg_val &= ~0x03;
-		reg_val |= sensor->hcg_again  & 0x03;
-
-		reg_val &= ~(0x03 << 2);
-		reg_val |= (again & 0x03) << 2;
-
-		ret  = imx219_write_reg(sensor, 0x3467, 0x00);
-		ret |= imx219_write_reg(sensor, 0x3464, 0x04);
-
-		ret |= imx219_write_reg(sensor, 0x30bb, reg_val);
-
-		ret |= imx219_write_reg(sensor, 0x315a, (sensor->hcg_dgain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x315b, sensor->hcg_dgain & 0xff);
-
-		ret |= imx219_write_reg(sensor, 0x315c, (dgain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x315d, dgain & 0xff);
-
-		ret |= imx219_write_reg(sensor, 0x3464, 0x14);
-		ret |= imx219_write_reg(sensor, 0x3467, 0x01);
-	}
-
 	return ret;
 }
 
 static int imx219_set_vsgain(struct imx219 *sensor, u32 gain)
 {
 	int ret = 0;
-	u32 again = 0;
-	u32 dgain = 0;
-	u8 reg_val;
-
-	if (gain < (3 << 10)) {
-		gain = (3 << 10);
-	}
-
-	if (gain < (3 << 10)) {
-		again = 0;
-	} else if (gain < (6 << 10)) {
-		again = 1;
-	} else if (gain < (12 << 10)) {
-		again = 2;
-	} else {
-		again = 3;
-	}
-	dgain = (gain * 0x100) / ((1 << again) << 10);
-
-	ret = imx219_read_reg(sensor, 0x30bb, &reg_val);
-	reg_val &= ~0x30;
-	reg_val |= (again & 0x03) << 4;
-
-	ret = imx219_write_reg(sensor, 0x3467, 0x00);
-	ret |= imx219_write_reg(sensor, 0x3464, 0x04);
-
-	ret |= imx219_write_reg(sensor, 0x30bb, reg_val);
-	ret |= imx219_write_reg(sensor, 0x315e, (dgain >> 8) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x315f, dgain & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x3464, 0x14);
-	ret |= imx219_write_reg(sensor, 0x3467, 0x01);
-
 	return ret;
 }
 
 static int imx219_set_fps(struct imx219 *sensor, u32 fps)
 {
-	u32 vts;
-	int ret = 0;
-
-	if (fps > sensor->cur_mode.ae_info.max_fps) {
-		fps = sensor->cur_mode.ae_info.max_fps;
-	}
-	else if (fps < sensor->cur_mode.ae_info.min_fps) {
-		fps = sensor->cur_mode.ae_info.min_fps;
-	}
-	vts = sensor->cur_mode.ae_info.max_fps *
-	      sensor->cur_mode.ae_info.def_frm_len_lines / fps;
-
-	ret = imx219_write_reg(sensor, 0x30B2, (u8)(vts >> 8) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x30B3, (u8)(vts & 0xff));
-
-	sensor->cur_mode.ae_info.cur_fps = fps;
-
-	if (sensor->cur_mode.hdr_mode == SENSOR_MODE_LINEAR) {
-		sensor->cur_mode.ae_info.max_integration_line = vts - 4;
-	} else {
-		if (sensor->cur_mode.stitching_mode ==
-		    SENSOR_STITCHING_DUAL_DCG){
-			sensor->cur_mode.ae_info.max_vsintegration_line = 44;
-			sensor->cur_mode.ae_info.max_integration_line = vts -
-				4 - sensor->cur_mode.ae_info.max_vsintegration_line;
-		} else {
-			sensor->cur_mode.ae_info.max_integration_line = vts - 4;
-		}
-	}
-	sensor->cur_mode.ae_info.curr_frm_len_lines = vts;
-	return ret;
+	return 0;
 }
 
 static int imx219_get_fps(struct imx219 *sensor, u32 *pfps)
@@ -1849,230 +1564,35 @@ static int imx219_set_test_pattern(struct imx219 *sensor, void * arg)
 	if (ret != 0)
 		return -ENOMEM;
 	if (test_pattern.enable) {
-		switch (test_pattern.pattern) {
-		case 0:
-			ret = imx219_write_reg(sensor, 0x303a, 0x04);
-			ret |= imx219_write_reg(sensor, 0x3253, 0x80);
-			break;
-		case 1:
-			ret = imx219_write_reg(sensor, 0x303a, 0x04);
-			ret |= imx219_write_reg(sensor, 0x3253, 0x82);
-			break;
-		case 2:
-			ret = imx219_write_reg(sensor, 0x303a, 0x04);
-			ret |= imx219_write_reg(sensor, 0x3253, 0x83);
-			break;
-		case 3:
-			ret = imx219_write_reg(sensor, 0x303a, 0x04);
-			ret |= imx219_write_reg(sensor, 0x3253, 0x92);
-			break;
-		default:
-			ret = -1;
-			break;
-		}
-	} else {
-		ret = imx219_write_reg(sensor, 0x303a, 0x04);
-		ret |= imx219_write_reg(sensor, 0x3253, 0x00);
-	}
+        ret = imx219_write_reg(sensor, IMX219_REG_TEST_PATTERN,
+                            IMX219_REG_VALUE_16BIT, test_pattern.pattern);
+    } else {
+        ret = imx219_write_reg(sensor, IMX219_REG_TEST_PATTERN,
+                            IMX219_REG_VALUE_16BIT, 0);
+    }
 	return ret;
 }
 
 static int imx219_set_ratio(struct imx219 *sensor, void* pratio)
 {
-	int ret = 0;
-	struct sensor_hdr_artio_s hdr_ratio;
-	struct vvcam_ae_info_s *pae_info = &sensor->cur_mode.ae_info;
-
-	ret = copy_from_user(&hdr_ratio, pratio, sizeof(hdr_ratio));
-
-	if ((hdr_ratio.ratio_l_s != pae_info->hdr_ratio.ratio_l_s) ||
-	    (hdr_ratio.ratio_s_vs != pae_info->hdr_ratio.ratio_s_vs) ||
-	    (hdr_ratio.accuracy != pae_info->hdr_ratio.accuracy)) {
-		pae_info->hdr_ratio.ratio_l_s = hdr_ratio.ratio_l_s;
-		pae_info->hdr_ratio.ratio_s_vs = hdr_ratio.ratio_s_vs;
-		pae_info->hdr_ratio.accuracy = hdr_ratio.accuracy;
-		/*imx219 vs exp is limited for isp,so no need update max exp*/
-	}
-
 	return 0;
 }
 
 static int imx219_set_blc(struct imx219 *sensor, sensor_blc_t *pblc)
 {
 	int ret = 0;
-	u32 r_offset, gr_offset, gb_offset, b_offset;
-	u32 r_gain, gr_gain, gb_gain, b_gain;
-
-	r_gain  = sensor->wb.r_gain;
-	gr_gain = sensor->wb.gr_gain;
-	gb_gain = sensor->wb.gb_gain;
-	b_gain  = sensor->wb.b_gain;
-
-	if (r_gain < 0x100)
-		r_gain = 0x100;
-	if (gr_gain < 0x100)
-		gr_gain = 0x100;
-	if (gb_gain < 0x100)
-		gb_gain = 0x100;
-	if (b_gain < 0x100)
-		b_gain = 0x100;
-
-	r_offset  = (r_gain  - 0x100) * pblc->red;
-	gr_offset = (gr_gain - 0x100) * pblc->gr;
-	gb_offset = (gb_gain - 0X100) * pblc->gb;
-	b_offset  = (b_gain  - 0X100) * pblc->blue;
-	//R,Gr,Gb,B HCG Offset
-	ret |= imx219_write_reg(sensor, 0x3378, (r_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3379, (r_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x337a,  r_offset        & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x337b, (gr_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x337c, (gr_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x337d,  gr_offset        & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x337e, (gb_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x337f, (gb_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3380,  gb_offset        & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x3381, (b_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3382, (b_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3383,  b_offset        & 0xff);
-
-	//R,Gr,Gb,B LCG Offset
-	ret |= imx219_write_reg(sensor, 0x3384, (r_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3385, (r_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3386,  r_offset        & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x3387, (gr_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3388, (gr_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3389,  gr_offset        & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x338a, (gb_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x338b, (gb_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x338c,  gb_offset        & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x338d, (b_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x338e, (b_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x338f,  b_offset        & 0xff);
-
-	//R,Gr,Gb,B VS Offset
-	ret |= imx219_write_reg(sensor, 0x3390, (r_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3391, (r_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3392,  r_offset        & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x3393, (gr_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3394, (gr_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3395,  gr_offset        & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x3396, (gb_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3397, (gb_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x3398,  gb_offset        & 0xff);
-
-	ret |= imx219_write_reg(sensor, 0x3399, (b_offset >> 16) & 0xff);
-	ret |= imx219_write_reg(sensor, 0x339a, (b_offset >> 8)  & 0xff);
-	ret |= imx219_write_reg(sensor, 0x339b,  b_offset        & 0xff);
-
-	memcpy(&sensor->blc, pblc, sizeof(sensor_blc_t));
 	return ret;
 }
 
 static int imx219_set_wb(struct imx219 *sensor, void *pwb_cfg)
 {
 	int ret = 0;
-	bool update_flag = false;
-	struct sensor_white_balance_s wb;
-	ret = copy_from_user(&wb, pwb_cfg, sizeof(wb));
-	if (ret != 0)
-		return -ENOMEM;
-	if (wb.r_gain != sensor->wb.r_gain) {
-		ret |= imx219_write_reg(sensor, 0x3360, (wb.r_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3361,  wb.r_gain & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3368, (wb.r_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3369,  wb.r_gain & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3370, (wb.r_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3371,  wb.r_gain & 0xff);
-		update_flag = true;
-	}
-
-	if (wb.gr_gain != sensor->wb.gr_gain) {
-		ret |= imx219_write_reg(sensor, 0x3362, (wb.gr_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3363,  wb.gr_gain & 0xff);
-		ret |= imx219_write_reg(sensor, 0x336a, (wb.gr_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x336b,  wb.gr_gain & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3372, (wb.gr_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3373,  wb.gr_gain & 0xff);
-		update_flag = true;
-	}
-
-	if (wb.gb_gain != sensor->wb.gb_gain) {
-		ret |= imx219_write_reg(sensor, 0x3364, (wb.gb_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3365,  wb.gb_gain & 0xff);
-		ret |= imx219_write_reg(sensor, 0x336c, (wb.gb_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x336d,  wb.gb_gain & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3374, (wb.gb_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3375,  wb.gb_gain & 0xff);
-		update_flag = true;
-	}
-
-	if (wb.b_gain != sensor->wb.b_gain) {
-		ret |= imx219_write_reg(sensor, 0x3366, (wb.b_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3367,  wb.b_gain & 0xff);
-		ret |= imx219_write_reg(sensor, 0x336e, (wb.b_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x336f,  wb.b_gain & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3376, (wb.b_gain >> 8) & 0xff);
-		ret |= imx219_write_reg(sensor, 0x3377,  wb.b_gain & 0xff);
-		update_flag = true;
-	}
-	if (ret != 0)
-		return ret;
-
-	memcpy (&sensor->wb, &wb, sizeof(struct sensor_white_balance_s));
-
-	if (update_flag) {
-		ret = imx219_set_blc(sensor, &sensor->blc);
-	}
 	return ret;
 }
 
 static int imx219_get_expand_curve(struct imx219 *sensor,
 				   sensor_expand_curve_t* pexpand_curve)
 {
-	int i;
-	if ((pexpand_curve->x_bit == 12) && (pexpand_curve->y_bit == 16)) {
-		uint8_t expand_px[64] = {6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-					6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-					6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-					6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6};
-
-		memcpy(pexpand_curve->expand_px,expand_px,sizeof(expand_px));
-
-		pexpand_curve->expand_x_data[0] = 0;
-		pexpand_curve->expand_y_data[0] = 0;
-		for(i = 1; i < 65; i++) {
-			pexpand_curve->expand_x_data[i] =
-				(1 << pexpand_curve->expand_px[i-1]) +
-				pexpand_curve->expand_x_data[i-1];
-
-			if (pexpand_curve->expand_x_data[i] < 512) {
-				pexpand_curve->expand_y_data[i] =
-					pexpand_curve->expand_x_data[i] << 1;
-
-			} else if (pexpand_curve->expand_x_data[i] < 768)
-			{
-				pexpand_curve->expand_y_data[i] =
-					(pexpand_curve->expand_x_data[i] - 256) << 2 ;
-
-			} else if (pexpand_curve->expand_x_data[i] < 2560) {
-				pexpand_curve->expand_y_data[i] =
-					(pexpand_curve->expand_x_data[i] - 512) << 3 ;
-
-			} else {
-				pexpand_curve->expand_y_data[i] =
-					(pexpand_curve->expand_x_data[i] - 2048) << 5;
-			}
-		}
-		return 0;
-	}
 	return -1;
 }
 
@@ -2080,15 +1600,14 @@ static long imx219_priv_ioctl(struct v4l2_subdev *sd,
                               unsigned int cmd,
                               void *arg)
 {
-	struct i2c_client *client = v4l2_get_subdevdata(sd);
-	struct ov2775 *sensor = client_to_ov2775(client);
+	struct imx219 *sensor = to_imx219(sd);
 	long ret = 0;
 	struct vvcam_sccb_data_s sensor_reg;
 	uint32_t value = 0;
 	sensor_blc_t blc;
 	sensor_expand_curve_t expand_curve;
 
-	mutex_lock(&sensor->lock);
+	mutex_lock(&sensor->mutex);
 	switch (cmd){
 	case VVSENSORIOC_S_POWER:
 		ret = 0;
@@ -2122,19 +1641,19 @@ static long imx219_priv_ioctl(struct v4l2_subdev *sd,
 		break;
 	case VVSENSORIOC_S_STREAM:
 		ret = copy_from_user(&value, arg, sizeof(value));
-		ret |= imx219_s_stream(&sensor->subdev, value);
+		ret |= imx219_set_stream(sd, value);
 		break;
 	case VVSENSORIOC_WRITE_REG:
 		ret = copy_from_user(&sensor_reg, arg,
 			sizeof(struct vvcam_sccb_data_s));
-		ret |= imx219_write_reg(sensor, sensor_reg.addr,
-			sensor_reg.data);
+		ret |= imx219_write_reg(sensor, sensor_reg.addr, 1,
+                                sensor_reg.data);
 		break;
 	case VVSENSORIOC_READ_REG:
 		ret = copy_from_user(&sensor_reg, arg,
 			sizeof(struct vvcam_sccb_data_s));
-		ret |= imx219_read_reg(sensor, sensor_reg.addr,
-			(u8 *)&sensor_reg.data);
+		ret |= imx219_read_reg(sensor, sensor_reg.addr, 1,
+                               &sensor_reg.data);
 		ret |= copy_to_user(arg, &sensor_reg,
 			sizeof(struct vvcam_sccb_data_s));
 		break;
@@ -2192,7 +1711,7 @@ static long imx219_priv_ioctl(struct v4l2_subdev *sd,
 		break;
 	}
 
-	mutex_unlock(&sensor->lock);
+	mutex_unlock(&sensor->mutex);
 	return ret;
 }
 
@@ -2221,134 +1740,6 @@ static const struct v4l2_subdev_ops imx219_subdev_ops = {
 	.video = &imx219_video_ops,
 	.pad = &imx219_pad_ops,
 };
-
-static const struct v4l2_subdev_internal_ops imx219_internal_ops = {
-	.open = imx219_open,
-};
-
-/* Initialize control handlers */
-static int imx219_init_controls(struct imx219 *imx219)
-{
-	struct i2c_client *client = v4l2_get_subdevdata(&imx219->sd);
-	struct v4l2_ctrl_handler *ctrl_hdlr;
-	unsigned int height = imx219->mode->height;
-	struct v4l2_fwnode_device_properties props;
-	int exposure_max, exposure_def, hblank;
-	int i, ret;
-
-	ctrl_hdlr = &imx219->ctrl_handler;
-	ret = v4l2_ctrl_handler_init(ctrl_hdlr, 12);
-	if (ret)
-		return ret;
-
-	mutex_init(&imx219->mutex);
-	ctrl_hdlr->lock = &imx219->mutex;
-
-	/* By default, PIXEL_RATE is read only */
-	imx219->pixel_rate = v4l2_ctrl_new_std(ctrl_hdlr, &imx219_ctrl_ops,
-					       V4L2_CID_PIXEL_RATE,
-					       IMX219_PIXEL_RATE,
-					       IMX219_PIXEL_RATE, 1,
-					       IMX219_PIXEL_RATE);
-
-	imx219->link_freq =
-		v4l2_ctrl_new_int_menu(ctrl_hdlr, &imx219_ctrl_ops,
-				       V4L2_CID_LINK_FREQ,
-				       ARRAY_SIZE(imx219_link_freq_menu) - 1, 0,
-				       imx219_link_freq_menu);
-	if (imx219->link_freq)
-		imx219->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
-
-	/* Initial vblank/hblank/exposure parameters based on current mode */
-	imx219->vblank = v4l2_ctrl_new_std(ctrl_hdlr, &imx219_ctrl_ops,
-					   V4L2_CID_VBLANK, IMX219_VBLANK_MIN,
-					   IMX219_VTS_MAX - height, 1,
-					   imx219->mode->vts_def - height);
-	hblank = IMX219_PPL_DEFAULT - imx219->mode->width;
-	imx219->hblank = v4l2_ctrl_new_std(ctrl_hdlr, &imx219_ctrl_ops,
-					   V4L2_CID_HBLANK, hblank, hblank,
-					   1, hblank);
-	if (imx219->hblank)
-		imx219->hblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
-	exposure_max = imx219->mode->vts_def - 4;
-	exposure_def = (exposure_max < IMX219_EXPOSURE_DEFAULT) ?
-		exposure_max : IMX219_EXPOSURE_DEFAULT;
-	imx219->exposure = v4l2_ctrl_new_std(ctrl_hdlr, &imx219_ctrl_ops,
-					     V4L2_CID_EXPOSURE,
-					     IMX219_EXPOSURE_MIN, exposure_max,
-					     IMX219_EXPOSURE_STEP,
-					     exposure_def);
-
-	v4l2_ctrl_new_std(ctrl_hdlr, &imx219_ctrl_ops, V4L2_CID_ANALOGUE_GAIN,
-			  IMX219_ANA_GAIN_MIN, IMX219_ANA_GAIN_MAX,
-			  IMX219_ANA_GAIN_STEP, IMX219_ANA_GAIN_DEFAULT);
-
-	v4l2_ctrl_new_std(ctrl_hdlr, &imx219_ctrl_ops, V4L2_CID_DIGITAL_GAIN,
-			  IMX219_DGTL_GAIN_MIN, IMX219_DGTL_GAIN_MAX,
-			  IMX219_DGTL_GAIN_STEP, IMX219_DGTL_GAIN_DEFAULT);
-
-	imx219->hflip = v4l2_ctrl_new_std(ctrl_hdlr, &imx219_ctrl_ops,
-					  V4L2_CID_HFLIP, 0, 1, 1, 0);
-	if (imx219->hflip)
-		imx219->hflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
-
-	imx219->vflip = v4l2_ctrl_new_std(ctrl_hdlr, &imx219_ctrl_ops,
-					  V4L2_CID_VFLIP, 0, 1, 1, 0);
-	if (imx219->vflip)
-		imx219->vflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
-
-	v4l2_ctrl_new_std_menu_items(ctrl_hdlr, &imx219_ctrl_ops,
-				     V4L2_CID_TEST_PATTERN,
-				     ARRAY_SIZE(imx219_test_pattern_menu) - 1,
-				     0, 0, imx219_test_pattern_menu);
-	for (i = 0; i < 4; i++) {
-		/*
-		 * The assumption is that
-		 * V4L2_CID_TEST_PATTERN_GREENR == V4L2_CID_TEST_PATTERN_RED + 1
-		 * V4L2_CID_TEST_PATTERN_BLUE   == V4L2_CID_TEST_PATTERN_RED + 2
-		 * V4L2_CID_TEST_PATTERN_GREENB == V4L2_CID_TEST_PATTERN_RED + 3
-		 */
-		v4l2_ctrl_new_std(ctrl_hdlr, &imx219_ctrl_ops,
-				  V4L2_CID_TEST_PATTERN_RED + i,
-				  IMX219_TESTP_COLOUR_MIN,
-				  IMX219_TESTP_COLOUR_MAX,
-				  IMX219_TESTP_COLOUR_STEP,
-				  IMX219_TESTP_COLOUR_MAX);
-		/* The "Solid color" pattern is white by default */
-	}
-
-	if (ctrl_hdlr->error) {
-		ret = ctrl_hdlr->error;
-		dev_err(&client->dev, "%s control init failed (%d)\n",
-			__func__, ret);
-		goto error;
-	}
-
-	ret = v4l2_fwnode_device_parse(&client->dev, &props);
-	if (ret)
-		goto error;
-
-	ret = v4l2_ctrl_new_fwnode_properties(ctrl_hdlr, &imx219_ctrl_ops,
-					      &props);
-	if (ret)
-		goto error;
-
-	imx219->sd.ctrl_handler = ctrl_hdlr;
-
-	return 0;
-
-error:
-	v4l2_ctrl_handler_free(ctrl_hdlr);
-	mutex_destroy(&imx219->mutex);
-
-	return ret;
-}
-
-static void imx219_free_controls(struct imx219 *imx219)
-{
-	v4l2_ctrl_handler_free(imx219->sd.ctrl_handler);
-	mutex_destroy(&imx219->mutex);
-}
 
 static int imx219_check_hwcfg(struct device *dev)
 {
@@ -2420,6 +1811,8 @@ static int imx219_probe(struct i2c_client *client)
 
 	v4l2_i2c_subdev_init(&imx219->sd, client, &imx219_subdev_ops);
 
+    imx219->i2c_client = client;
+
 	/* Check the hardware configuration in device tree */
 	if (imx219_check_hwcfg(dev))
 		return -EINVAL;
@@ -2480,12 +1873,7 @@ static int imx219_probe(struct i2c_client *client)
 		goto error_power_off;
 	usleep_range(100, 110);
 
-	ret = imx219_init_controls(imx219);
-	if (ret)
-		goto error_power_off;
-
 	/* Initialize subdev */
-	imx219->sd.internal_ops = &imx219_internal_ops;
 	imx219->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
 			    V4L2_SUBDEV_FL_HAS_EVENTS;
 	imx219->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
@@ -2500,7 +1888,7 @@ static int imx219_probe(struct i2c_client *client)
 	ret = media_entity_pads_init(&imx219->sd.entity, 1, &imx219->pad);
 	if (ret) {
 		dev_err(dev, "failed to init entity pads: %d\n", ret);
-		goto error_handler_free;
+		goto error_power_off;
 	}
 
 	ret = v4l2_async_register_subdev_sensor(&imx219->sd);
@@ -2521,9 +1909,6 @@ static int imx219_probe(struct i2c_client *client)
 error_media_entity:
 	media_entity_cleanup(&imx219->sd.entity);
 
-error_handler_free:
-	imx219_free_controls(imx219);
-
 error_power_off:
 	imx219_power_off(dev);
 
@@ -2533,11 +1918,9 @@ error_power_off:
 static int imx219_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
-	struct imx219 *imx219 = to_imx219(sd);
 
 	v4l2_async_unregister_subdev(sd);
 	media_entity_cleanup(&sd->entity);
-	imx219_free_controls(imx219);
 
 	pm_runtime_disable(&client->dev);
 	if (!pm_runtime_status_suspended(&client->dev))
@@ -2548,7 +1931,7 @@ static int imx219_remove(struct i2c_client *client)
 }
 
 static const struct of_device_id imx219_dt_ids[] = {
-	{ .compatible = "sony,imx219" },
+	{ .compatible = "sony,imx219-vvcam" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, imx219_dt_ids);
