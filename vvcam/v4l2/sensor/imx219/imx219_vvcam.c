@@ -1075,28 +1075,16 @@ static int imx219_set_pad_format(struct v4l2_subdev *sd,
 		   imx219->fmt.code != fmt->format.code) {
 		imx219->fmt = fmt->format;
 		imx219->mode = mode;
-		/* Update limits and set FPS to default */
-		__v4l2_ctrl_modify_range(imx219->vblank, IMX219_VBLANK_MIN,
-					 IMX219_VTS_MAX - mode->height, 1,
-					 mode->vts_def - mode->height);
-		__v4l2_ctrl_s_ctrl(imx219->vblank,
-				   mode->vts_def - mode->height);
 		/* Update max exposure while meeting expected vblanking */
 		exposure_max = mode->vts_def - 4;
 		exposure_def = (exposure_max < IMX219_EXPOSURE_DEFAULT) ?
 			exposure_max : IMX219_EXPOSURE_DEFAULT;
-		__v4l2_ctrl_modify_range(imx219->exposure,
-					 imx219->exposure->minimum,
-					 exposure_max, imx219->exposure->step,
-					 exposure_def);
 		/*
 		 * Currently PPL is fixed to IMX219_PPL_DEFAULT, so hblank
 		 * depends on mode->width only, and is not changeble in any
 		 * way other than changing the mode.
 		 */
 		hblank = IMX219_PPL_DEFAULT - mode->width;
-		__v4l2_ctrl_modify_range(imx219->hblank, hblank, hblank, 1,
-					 hblank);
 	}
 
 	mutex_unlock(&imx219->mutex);
@@ -1201,11 +1189,6 @@ static int imx219_start_streaming(struct imx219 *imx219)
 			__func__, ret);
 		goto err_rpm_put;
 	}
-
-	/* Apply customized values from user */
-	ret =  __v4l2_ctrl_handler_setup(imx219->sd.ctrl_handler);
-	if (ret)
-		goto err_rpm_put;
 
     dev_info(&client->dev, "%s started\n", __func__);
 
