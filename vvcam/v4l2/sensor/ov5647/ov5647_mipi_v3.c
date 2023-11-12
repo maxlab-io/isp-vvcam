@@ -833,6 +833,11 @@ static int ov5647_probe(struct i2c_client *client,
 		return retval;
 	}
 
+	retval = ov5647_power_off(sensor);
+	if (retval < 0) {
+		dev_err(dev, "%s: sensor power off fail\n", __func__);
+	}
+	msleep(100);
 	retval = ov5647_power_on(sensor);
 	if (retval < 0) {
 		dev_err(dev, "%s: sensor power on fail\n", __func__);
