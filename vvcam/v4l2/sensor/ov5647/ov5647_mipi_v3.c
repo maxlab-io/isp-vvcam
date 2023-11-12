@@ -152,8 +152,11 @@ static int ov5647_power_on(struct ov5647 *sensor)
 	int ret;
 	pr_debug("enter %s\n", __func__);
 
-	if (gpio_is_valid(sensor->pwn_gpio))
+	if (gpio_is_valid(sensor->pwn_gpio)) {
+		gpio_set_value_cansleep(sensor->pwn_gpio, 0);
+        msleep(50);
 		gpio_set_value_cansleep(sensor->pwn_gpio, 1);
+    }
 
 	ret = clk_prepare_enable(sensor->sensor_clk);
 	if (ret < 0)
@@ -833,15 +836,11 @@ static int ov5647_probe(struct i2c_client *client,
 		return retval;
 	}
 
-	retval = ov5647_power_off(sensor);
-	if (retval < 0) {
-		dev_err(dev, "%s: sensor power off fail\n", __func__);
-	}
-	msleep(100);
 	retval = ov5647_power_on(sensor);
 	if (retval < 0) {
 		dev_err(dev, "%s: sensor power on fail\n", __func__);
 	}
+    msleep(100);
 
 	ov5647_reset(sensor);
 
