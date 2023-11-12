@@ -819,16 +819,6 @@ struct imx219 {
 	struct gpio_desc *reset_gpio;
 	struct regulator_bulk_data supplies[IMX219_NUM_SUPPLIES];
 
-	struct v4l2_ctrl_handler ctrl_handler;
-	/* V4L2 Controls */
-	struct v4l2_ctrl *pixel_rate;
-	struct v4l2_ctrl *link_freq;
-	struct v4l2_ctrl *exposure;
-	struct v4l2_ctrl *vflip;
-	struct v4l2_ctrl *hflip;
-	struct v4l2_ctrl *vblank;
-	struct v4l2_ctrl *hblank;
-
 	/* Current mode */
 	const struct imx219_mode *mode;
 
@@ -937,9 +927,6 @@ static u32 imx219_get_format_code(struct imx219 *imx219, u32 code)
 
 	if (i >= ARRAY_SIZE(codes))
 		i = 0;
-
-	i = (i & ~3) | (imx219->vflip->val ? 2 : 0) |
-	    (imx219->hflip->val ? 1 : 0);
 
 	return codes[i];
 }
@@ -1228,10 +1215,6 @@ static int imx219_start_streaming(struct imx219 *imx219)
 	if (ret)
 		goto err_rpm_put;
 
-	/* vflip and hflip cannot change during streaming */
-	__v4l2_ctrl_grab(imx219->vflip, true);
-	__v4l2_ctrl_grab(imx219->hflip, true);
-
 	return 0;
 
 err_rpm_put:
@@ -1250,9 +1233,6 @@ static void imx219_stop_streaming(struct imx219 *imx219)
 			       IMX219_REG_VALUE_08BIT, IMX219_MODE_STANDBY);
 	if (ret)
 		dev_err(&client->dev, "%s failed to set stream\n", __func__);
-
-	__v4l2_ctrl_grab(imx219->vflip, false);
-	__v4l2_ctrl_grab(imx219->hflip, false);
 
 	pm_runtime_put(&client->dev);
 }
